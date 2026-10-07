@@ -1,0 +1,343 @@
+DEFINE
+    // =====================================================================
+    // Reporting month: every measure reads the month from here
+    // =====================================================================
+
+    // Month end selected in the slicer; latest month when nothing is selected
+    MEASURE '_Measures'[Sel Month End] = MAX ( ReportMonth[MonthEnd] )
+    // Prior month end, for month-over-month comparison
+    MEASURE '_Measures'[Prev Month End] = EOMONTH ( [Sel Month End], -1 )
+    // Earliest reporting month in the data; lower bound of the trend window
+    MEASURE '_Measures'[First Month End] = CALCULATE ( MIN ( ReportMonth[MonthEnd] ), ALL ( ReportMonth ) )
+    // Display label, e.g. "Reporting month: August 2026"
+    MEASURE '_Measures'[Sel Month Label] = "Reporting month: " & FORMAT ( [Sel Month End], "mmmm yyyy" )
+    // True when the month on the axis falls in the 12 months to the selected month; used by all Trend measures
+    MEASURE '_Measures'[In Window] =
+        VAR s = [Sel Month End]
+        VAR m = MAX ( Dim_Date[MonthEnd] )
+        RETURN m <= s && m > EOMONTH ( s, -12 ) && m >= [First Month End]
+
+    // =====================================================================
+    // Events and losses (flow measures, additive over time)
+    // =====================================================================
+
+    MEASURE '_Measures'[Event Count] = COUNTROWS ( Events )
+    MEASURE '_Measures'[Gross Loss] = SUM ( Events[GrossLoss] )
+    // Gross loss less recoveries
+    MEASURE '_Measures'[Net Loss] = SUM ( Events[NetLoss] )
+    MEASURE '_Measures'[High Severity Events] = CALCULATE ( [Event Count], Events[Severity] = "High" )
+    // Net loss in the selected month
+    MEASURE '_Measures'[Net Loss (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN COALESCE ( CALCULATE ( [Net Loss], REMOVEFILTERS ( Dim_Date ), Dim_Date[MonthEnd] = s ), 0 )
+    // Net loss in the prior month
+    MEASURE '_Measures'[Net Loss (Prev)] =
+        VAR p = [Prev Month End]
+        RETURN CALCULATE ( [Net Loss], REMOVEFILTERS ( Dim_Date ), Dim_Date[MonthEnd] = p )
+    // Card reference label, e.g. "Down $152,735 vs prior month"
+    MEASURE '_Measures'[Net Loss vs Prev] =
+        VAR cur = [Net Loss (Sel)]
+        VAR prv = [Net Loss (Prev)]
+        VAR d = cur - prv
+        RETURN IF ( ISBLANK ( prv ), "No prior month in data",
+            IF ( d >= 0, "Up ", "Down " ) & FORMAT ( ABS ( d ), "$#,0" ) & " vs prior month" )
+    MEASURE '_Measures'[High Sev Events (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN COALESCE ( CALCULATE ( [High Severity Events], REMOVEFILTERS ( Dim_Date ), Dim_Date[MonthEnd] = s ), 0 )
+    MEASURE '_Measures'[High Sev Events (Prev)] =
+        VAR p = [Prev Month End]
+        RETURN COALESCE ( CALCULATE ( [High Severity Events], REMOVEFILTERS ( Dim_Date ), Dim_Date[MonthEnd] = p ), 0 )
+    // Card reference label: change in count vs prior month
+    MEASURE '_Measures'[High Sev vs Prev] =
+        VAR d = [High Sev Events (Sel)] - [High Sev Events (Prev)]
+        RETURN IF ( d = 0, "No change vs prior month", IF ( d > 0, "Up ", "Down " ) & ABS ( d ) & " vs prior month" )
+    // Trend versions: blank outside the 12-month window
+    MEASURE '_Measures'[Net Loss (Trend)] = IF ( [In Window], [Net Loss] )
+    MEASURE '_Measures'[Gross Loss (Trend)] = IF ( [In Window], [Gross Loss] )
+    // Rolling 12 months to the selected month
+    MEASURE '_Measures'[Net Loss 12M] =
+        VAR s = [Sel Month End]
+        RETURN CALCULATE ( [Net Loss], REMOVEFILTERS ( Dim_Date ), DATESBETWEEN ( Dim_Date[Date], EOMONTH ( s, -12 ) + 1, s ) )
+    MEASURE '_Measures'[Events 12M] =
+        VAR s = [Sel Month End]
+        RETURN CALCULATE ( [Event Count], REMOVEFILTERS ( Dim_Date ), DATESBETWEEN ( Dim_Date[Date], EOMONTH ( s, -12 ) + 1, s ) )
+    // 1 when the event falls in the selected month or the two months before it; visual-level filter for event tables
+    MEASURE '_Measures'[Event In Last 3M] =
+        VAR s = [Sel Month End]
+        VAR d = MAX ( Events[EventDate] )
+        RETURN IF ( d <= s && d > EOMONTH ( s, -3 ), 1 )
+
+    // =====================================================================
+    // Issues: month-end snapshots (semi-additive, never summed across months)
+    // =====================================================================
+
+    // Open issues; meaningful only within a single month end
+    MEASURE '_Measures'[Open Issues] = COUNTROWS ( IssueSnapshot )
+    MEASURE '_Measures'[Overdue Issues] = CALCULATE ( COUNTROWS ( IssueSnapshot ), IssueSnapshot[IsOverdue] = TRUE () )
+    MEASURE '_Measures'[Open Issues (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN COALESCE ( CALCULATE ( [Open Issues], REMOVEFILTERS ( Dim_Date ), IssueSnapshot[MonthEnd] = s ), 0 )
+    MEASURE '_Measures'[Overdue Issues (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN COALESCE ( CALCULATE ( [Overdue Issues], REMOVEFILTERS ( Dim_Date ), IssueSnapshot[MonthEnd] = s ), 0 )
+    MEASURE '_Measures'[Overdue Issues (Prev)] =
+        VAR p = [Prev Month End]
+        RETURN COALESCE ( CALCULATE ( [Overdue Issues], REMOVEFILTERS ( Dim_Date ), IssueSnapshot[MonthEnd] = p ), 0 )
+    // Overdue regulatory and internal audit issues; drives the red status on the overdue card
+    MEASURE '_Measures'[Reg Audit Overdue (Sel)] =
+        CALCULATE ( [Overdue Issues (Sel)], IssueSnapshot[IssueSource] IN { "Regulatory", "Internal Audit" } )
+    // Overdue regulatory issues; used in the summary sentence
+    MEASURE '_Measures'[Regulatory Overdue (Sel)] =
+        CALCULATE ( [Overdue Issues (Sel)], IssueSnapshot[IssueSource] = "Regulatory" )
+    MEASURE '_Measures'[High Open Issues (Sel)] =
+        CALCULATE ( [Open Issues (Sel)], IssueSnapshot[Severity] = "High" )
+    // Card reference label for overdue issues
+    MEASURE '_Measures'[Overdue Card Detail] =
+        VAR d = [Overdue Issues (Sel)] - [Overdue Issues (Prev)]
+        RETURN "of " & FORMAT ( [Open Issues (Sel)], "0" ) & " open; " & FORMAT ( [Reg Audit Overdue (Sel)], "0" )
+            & " reg/audit; " & IF ( d = 0, "no change", IF ( d > 0, "+", "-" ) & ABS ( d ) ) & " vs prior"
+    // Days past due at the selected month end; blank when the issue was not open, so the row drops out of the table
+    MEASURE '_Measures'[Days Past Due (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN CALCULATE ( MAX ( IssueSnapshot[DaysPastDue] ), REMOVEFILTERS ( Dim_Date ), IssueSnapshot[MonthEnd] = s )
+    MEASURE '_Measures'[Open Issues (Trend)] = IF ( [In Window], [Open Issues] )
+    // Zero rather than blank when nothing is overdue, so the line does not break
+    MEASURE '_Measures'[Overdue Issues (Trend)] = IF ( [In Window], COALESCE ( [Overdue Issues], 0 ) )
+
+    // =====================================================================
+    // Issues: flow measures on role-playing dates
+    // =====================================================================
+
+    // By opened date (active relationship)
+    MEASURE '_Measures'[Issues Opened] = COUNTROWS ( Issues )
+    // By closed date (inactive relationship enabled for this measure)
+    MEASURE '_Measures'[Issues Closed] =
+        CALCULATE ( COUNTROWS ( Issues ), USERELATIONSHIP ( Issues[ClosedDate], Dim_Date[Date] ) )
+    // By due date (inactive relationship enabled for this measure)
+    MEASURE '_Measures'[Issues Due] =
+        CALCULATE ( COUNTROWS ( Issues ), USERELATIONSHIP ( Issues[DueDate], Dim_Date[Date] ) )
+
+    // =====================================================================
+    // KRIs
+    // =====================================================================
+
+    MEASURE '_Measures'[KRIs Red (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN COALESCE ( CALCULATE ( COUNTROWS ( KRI ), REMOVEFILTERS ( Dim_Date ), KRI[AsOfDate] = s, KRI[Status] = "Red" ), 0 )
+    MEASURE '_Measures'[KRIs Red (Prev)] =
+        VAR p = [Prev Month End]
+        RETURN COALESCE ( CALCULATE ( COUNTROWS ( KRI ), REMOVEFILTERS ( Dim_Date ), KRI[AsOfDate] = p, KRI[Status] = "Red" ), 0 )
+    MEASURE '_Measures'[KRIs Amber (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN COALESCE ( CALCULATE ( COUNTROWS ( KRI ), REMOVEFILTERS ( Dim_Date ), KRI[AsOfDate] = s, KRI[Status] = "Amber" ), 0 )
+    // KRIs actually reported in the selected month
+    MEASURE '_Measures'[KRIs Reported (Sel)] =
+        VAR s = [Sel Month End]
+        RETURN COALESCE ( CALCULATE ( COUNTROWS ( KRI ), REMOVEFILTERS ( Dim_Date ), KRI[AsOfDate] = s ), 0 )
+    // Card reference label for KRIs
+    MEASURE '_Measures'[KRI Card Detail] =
+        VAR d = [KRIs Red (Sel)] - [KRIs Red (Prev)]
+        RETURN "of " & FORMAT ( [KRIs Reported (Sel)], "0" ) & "; " & FORMAT ( [KRIs Amber (Sel)], "0" ) & " at amber; "
+            & IF ( d = 0, "no change", IF ( d > 0, "up ", "down " ) & ABS ( d ) ) & " vs prior month"
+    // KRI value for trend charts; each chart is filtered to one KRI
+    MEASURE '_Measures'[KRI Value (Trend)] = IF ( [In Window], AVERAGE ( KRI[Value] ) )
+    // Threshold lines ignore the date filter, so they still draw in months with no KRI value
+    MEASURE '_Measures'[KRI Amber Line] = IF ( [In Window], CALCULATE ( MAX ( KRI[AmberThreshold] ), REMOVEFILTERS ( Dim_Date ) ) )
+    MEASURE '_Measures'[KRI Red Line] = IF ( [In Window], CALCULATE ( MAX ( KRI[RedThreshold] ), REMOVEFILTERS ( Dim_Date ) ) )
+    // Status of one KRI in the selected month; "No data" when the value is missing, not blank or zero
+    MEASURE '_Measures'[KRI Status (Sel)] =
+        VAR s = [Sel Month End]
+        VAR st = CALCULATE ( SELECTEDVALUE ( KRI[Status] ), REMOVEFILTERS ( Dim_Date ), KRI[AsOfDate] = s )
+        VAR inScope = CALCULATE ( COUNTROWS ( KRI ), REMOVEFILTERS ( Dim_Date ) ) > 0
+        RETURN IF ( ISBLANK ( st ) && inScope, "No data", st )
+
+    // =====================================================================
+    // Control testing
+    // =====================================================================
+
+    // Tests in the six months to the selected month
+    MEASURE '_Measures'[Tests Last 6M] =
+        VAR s = [Sel Month End]
+        RETURN CALCULATE ( COUNTROWS ( ControlTests ), REMOVEFILTERS ( Dim_Date ),
+            ControlTests[TestDate] > EDATE ( s, -6 ), ControlTests[TestDate] <= s )
+    MEASURE '_Measures'[Deficient Tests Last 6M] = CALCULATE ( [Tests Last 6M], ControlTests[Result] = "Deficient" )
+    MEASURE '_Measures'[Tests Card Detail] = "of " & FORMAT ( [Tests Last 6M], "0" ) & " tests in the last 6 months"
+    MEASURE '_Measures'[Tests Passed Last 12M] =
+        VAR s = [Sel Month End]
+        RETURN CALCULATE ( COUNTROWS ( ControlTests ), REMOVEFILTERS ( Dim_Date ),
+            ControlTests[TestDate] > EDATE ( s, -12 ), ControlTests[TestDate] <= s, ControlTests[Result] = "Effective" )
+    MEASURE '_Measures'[Deficient Tests Last 12M] =
+        VAR s = [Sel Month End]
+        RETURN CALCULATE ( COUNTROWS ( ControlTests ), REMOVEFILTERS ( Dim_Date ),
+            ControlTests[TestDate] > EDATE ( s, -12 ), ControlTests[TestDate] <= s, ControlTests[Result] = "Deficient" )
+    // 1 when the test date is on or before the selected month; keeps later tests out of the table
+    MEASURE '_Measures'[Test Up To Sel] = IF ( MAX ( ControlTests[TestDate] ) <= [Sel Month End], 1 )
+
+    // =====================================================================
+    // RCSA (as-of lookup: latest assessment on or before the selected month)
+    // =====================================================================
+
+    // Current assessment date; ALL ( RCSA ) so every department and heat map cell resolves to the same cycle
+    MEASURE '_Measures'[RCSA Cycle Date] =
+        VAR s = [Sel Month End]
+        RETURN CALCULATE ( MAX ( RCSA[AssessmentDate] ), ALL ( RCSA ), RCSA[AssessmentDate] <= s )
+    // Prior assessment date, for rating changes
+    MEASURE '_Measures'[RCSA Prior Date] =
+        VAR c = [RCSA Cycle Date]
+        RETURN CALCULATE ( MAX ( RCSA[AssessmentDate] ), ALL ( RCSA ), RCSA[AssessmentDate] < c )
+    // Cycle in use, e.g. "2026-H1 RCSA"
+    MEASURE '_Measures'[RCSA Cycle Label] =
+        VAR c = [RCSA Cycle Date]
+        RETURN IF ( ISBLANK ( c ), "No RCSA completed by this month",
+            CALCULATE ( SELECTEDVALUE ( RCSA[AssessmentCycle] ), ALL ( RCSA ), RCSA[AssessmentDate] = c ) & " RCSA" )
+    // Risks per heat map cell, current cycle only
+    MEASURE '_Measures'[Heat Count] =
+        VAR c = [RCSA Cycle Date]
+        RETURN CALCULATE ( COUNTROWS ( RCSA ), RCSA[AssessmentDate] = c )
+    // Cell text; a space instead of blank keeps empty cells visible
+    MEASURE '_Measures'[Heat Label] =
+        VAR n = [Heat Count]
+        RETURN IF ( ISBLANK ( n ), " ", FORMAT ( n, "0" ) )
+    // Cell color by likelihood x impact score, four bands
+    MEASURE '_Measures'[Heat Color] =
+        VAR sc = MAX ( Axis_Likelihood[Likelihood] ) * MAX ( Axis_Impact[Impact] )
+        RETURN SWITCH ( TRUE (), sc <= 4, "#DCEBDD", sc <= 9, "#F3E2B3", sc <= 16, "#EFB49A", "#D4574B" )
+    // White text on the critical band
+    MEASURE '_Measures'[Heat Font Color] =
+        IF ( MAX ( Axis_Likelihood[Likelihood] ) * MAX ( Axis_Impact[Impact] ) >= 20, "#FFFFFF", "#1D2935" )
+    MEASURE '_Measures'[Residual Score] =
+        VAR c = [RCSA Cycle Date]
+        RETURN CALCULATE ( MAX ( RCSA[ResidualScore] ), RCSA[AssessmentDate] = c )
+    // Prior-cycle score; heat map axis filters removed, since the prior rating may sit in a different cell
+    MEASURE '_Measures'[Residual Score Prior] =
+        VAR p = [RCSA Prior Date]
+        RETURN IF ( NOT ISBLANK ( [Residual Score] ),
+            CALCULATE ( MAX ( RCSA[ResidualScore] ), RCSA[AssessmentDate] = p,
+                REMOVEFILTERS ( Axis_Likelihood ), REMOVEFILTERS ( Axis_Impact ) ) )
+    MEASURE '_Measures'[Inherent Score] =
+        VAR c = [RCSA Cycle Date]
+        RETURN CALCULATE ( MAX ( RCSA[InherentScore] ), RCSA[AssessmentDate] = c )
+    // Score to rating: 1-4 Low, 5-9 Moderate, 10-16 High, 20-25 Critical
+    MEASURE '_Measures'[Residual Rating] =
+        VAR sc = [Residual Score]
+        RETURN SWITCH ( TRUE (), ISBLANK ( sc ), BLANK (), sc <= 4, "Low", sc <= 9, "Moderate", sc <= 16, "High", "Critical" )
+    MEASURE '_Measures'[Residual Rating Prior] =
+        VAR sc = [Residual Score Prior]
+        RETURN SWITCH ( TRUE (), ISBLANK ( sc ), BLANK (), sc <= 4, "Low", sc <= 9, "Moderate", sc <= 16, "High", "Critical" )
+    MEASURE '_Measures'[Inherent Rating] =
+        VAR sc = [Inherent Score]
+        RETURN SWITCH ( TRUE (), ISBLANK ( sc ), BLANK (), sc <= 4, "Low", sc <= 9, "Moderate", sc <= 16, "High", "Critical" )
+    // Rating change since the prior cycle, e.g. "Up from Moderate"
+    MEASURE '_Measures'[Residual Change] =
+        VAR a = [Residual Score]
+        VAR b = [Residual Score Prior]
+        RETURN SWITCH ( TRUE (), ISBLANK ( a ), BLANK (), ISBLANK ( b ), "First assessment",
+            a > b, "Up from " & [Residual Rating Prior], a < b, "Down from " & [Residual Rating Prior], "Same" )
+    // Self-assessed control effectiveness, current cycle
+    MEASURE '_Measures'[Control Effectiveness] =
+        VAR c = [RCSA Cycle Date]
+        RETURN CALCULATE ( SELECTEDVALUE ( RCSA[ControlEffectiveness] ), RCSA[AssessmentDate] = c )
+    // Self-assessment gap: rated Effective, but a control test failed in the last six months
+    MEASURE '_Measures'[Self-Assessment Gap] =
+        VAR s = [Sel Month End]
+        VAR ce = [Control Effectiveness]
+        VAR d = CALCULATE ( COUNTROWS ( ControlTests ), REMOVEFILTERS ( Dim_Date ), ControlTests[Result] = "Deficient",
+            ControlTests[TestDate] > EDATE ( s, -6 ), ControlTests[TestDate] <= s )
+        RETURN IF ( ce = "Effective" && d > 0, "Testing failed" )
+    // Number of risks with a self-assessment gap; used in the summary sentence
+    MEASURE '_Measures'[Gap Risk Count] =
+        COUNTROWS ( FILTER ( VALUES ( Dim_Risk[RiskID] ), NOT ISBLANK ( [Self-Assessment Gap] ) ) )
+    // Background color for the rating column
+    MEASURE '_Measures'[Rating Color] =
+        SWITCH ( [Residual Rating], "Critical", "#D4574B", "High", "#EFB49A", "Moderate", "#F3E2B3", "Low", "#DCEBDD" )
+
+    // =====================================================================
+    // Executive summary
+    // =====================================================================
+
+    // 1 when the exception applies to the selected month; filter for the attention list
+    MEASURE '_Measures'[Exception In Month] =
+        VAR s = [Sel Month End]
+        RETURN IF ( CALCULATE ( COUNTROWS ( Exceptions ), Exceptions[MonthEnd] = s ) > 0, 1 )
+    // Item type color: red for regulatory findings and red KRIs, amber for audit and control items, grey otherwise
+    MEASURE '_Measures'[Item Type Color] =
+        VAR p = MIN ( Exceptions[Priority] )
+        RETURN SWITCH ( TRUE (), p <= 2, "#F6DAD7", p <= 5, "#F8E7C8", "#E7EBEF" )
+    // One-sentence summary at the top of the page
+    MEASURE '_Measures'[Narrative] =
+        VAR s = [Sel Month End]
+        VAR reg = [Regulatory Overdue (Sel)]
+        VAR red = [KRIs Red (Sel)]
+        VAR redNames =
+            CONCATENATEX (
+                CALCULATETABLE ( VALUES ( KRI[KRIName] ), REMOVEFILTERS ( Dim_Date ), KRI[AsOfDate] = s, KRI[Status] = "Red" ),
+                KRI[KRIName], ", " )
+        VAR gap = [Gap Risk Count]
+        // Three clauses; each is blank when its condition does not hold
+        VAR t1 = IF ( reg > 0, FORMAT ( reg, "0" ) & " regulatory finding" & IF ( reg > 1, "s are", " is" ) & " past due" )
+        VAR t2 = IF ( red > 0, FORMAT ( red, "0" ) & " KRI" & IF ( red > 1, "s" ) & " at red (" & redNames & ")" )
+        VAR t3 = IF ( gap > 0, FORMAT ( gap, "0" ) & " risk" & IF ( gap > 1, "s" ) & " rated effective in the RCSA failed recent control testing" )
+        // Keep non-blank clauses and join them in order
+        VAR parts = FILTER ( { ( 1, t1 ), ( 2, t2 ), ( 3, t3 ) }, NOT ISBLANK ( [Value2] ) )
+        RETURN FORMAT ( s, "mmmm yyyy" ) & ": "
+            & IF ( ISEMPTY ( parts ), "no regulatory items past due and no KRIs at red.",
+                CONCATENATEX ( parts, [Value2], "; ", [Value1], ASC ) & "." )
+    // KPI card status colors: red = act now, amber = watch, green = normal
+    MEASURE '_Measures'[Color High Sev] = IF ( [High Sev Events (Sel)] > [High Sev Events (Prev)], "#C98314", "#D5DBE1" )
+    MEASURE '_Measures'[Color KRI] = IF ( [KRIs Red (Sel)] > 0, "#B83227", IF ( [KRIs Amber (Sel)] > 0, "#C98314", "#2F7D4F" ) )
+    MEASURE '_Measures'[Color Overdue] = IF ( [Reg Audit Overdue (Sel)] > 0, "#B83227", IF ( [Overdue Issues (Sel)] > 0, "#C98314", "#2F7D4F" ) )
+    MEASURE '_Measures'[Color Tests] = IF ( [Deficient Tests Last 6M] > 0, "#C98314", "#2F7D4F" )
+
+    // =====================================================================
+    // Data quality and reconciliation
+    // =====================================================================
+
+    // Event count reported by the source system
+    MEASURE '_Measures'[Recon Source Count] = SUM ( Recon_Source[SourceEventCount] )
+    // Rows loaded before cleaning, duplicates included
+    MEASURE '_Measures'[Recon Raw Count] = SUM ( Recon_Source[RawLoadedCount] )
+    // Gross loss reported by the source system
+    MEASURE '_Measures'[Recon Source Gross] = SUM ( Recon_Source[SourceGrossLoss] )
+    // Matched when both event count and gross loss agree with the source; department filter removed so the check always covers all records
+    MEASURE '_Measures'[Recon Status] =
+        VAR src = [Recon Source Count]
+        VAR rep = CALCULATE ( [Event Count], REMOVEFILTERS ( Dim_Department ) )
+        VAR gl = CALCULATE ( [Gross Loss], REMOVEFILTERS ( Dim_Department ) )
+        RETURN IF ( ISBLANK ( src ), BLANK (), IF ( src = rep && [Recon Source Gross] = gl, "Matched", "Break" ) )
+    MEASURE '_Measures'[Recon Status Color] = SWITCH ( [Recon Status], "Matched", "#D9EEE1", "Break", "#F6DAD7" )
+    // Months where the reconciliation matched
+    MEASURE '_Measures'[Recon Months Matched] =
+        COUNTROWS ( FILTER ( VALUES ( Dim_Date[MonthEnd] ), [Recon Status] = "Matched" ) )
+    MEASURE '_Measures'[Recon Months Total] = COUNTROWS ( Recon_Source )
+    // e.g. "12 of 12"
+    MEASURE '_Measures'[Recon Card] = FORMAT ( [Recon Months Matched], "0" ) & " of " & FORMAT ( [Recon Months Total], "0" )
+    // Rows loaded to rows reported, e.g. "244 to 243"
+    MEASURE '_Measures'[Events Loaded vs Reported] =
+        FORMAT ( [Recon Raw Count], "0" ) & " to " & FORMAT ( CALCULATE ( [Event Count], REMOVEFILTERS ( Dim_Date ), REMOVEFILTERS ( Dim_Department ) ), "0" )
+    // Exceptions across all data quality rules
+    MEASURE '_Measures'[DQ Records Flagged] = SUM ( DQ_Summary[Exceptions] )
+    // Share of expected monthly KRI values actually reported
+    MEASURE '_Measures'[KRI Completeness] =
+        VAR miss = CALCULATE ( SUM ( DQ_Summary[Exceptions] ), DQ_Summary[Rule] = "Missing monthly KRI value" )
+        VAR expct = CALCULATE ( SUM ( DQ_Summary[Checked] ), DQ_Summary[Rule] = "Missing monthly KRI value" )
+        RETURN DIVIDE ( expct - miss, expct )
+    // Cross-source check: outage minutes from the event system
+    MEASURE '_Measures'[Outage Minutes (Events)] =
+        CALCULATE ( SUM ( Events[DurationMinutes] ), Events[EventType] = "Business Disruption & System Failures",
+            Dim_Department[Department] = "Digital Banking & IT" )
+    // Cross-source check: outage minutes reported in KRI-09; should equal the event total
+    MEASURE '_Measures'[Outage Minutes (KRI)] = CALCULATE ( SUM ( KRI[Numerator] ), KRI[KRIID] = "KRI-09" )
+    MEASURE '_Measures'[Outage Check] =
+        VAR k = [Outage Minutes (KRI)]
+        RETURN IF ( ISBLANK ( k ), BLANK (),
+            IF ( COALESCE ( [Outage Minutes (Events)], 0 ) = k, "Matched", "Break" ) )
+
+    // =====================================================================
+    // Department profile (drill-through)
+    // =====================================================================
+
+    MEASURE '_Measures'[Dept Title] = SELECTEDVALUE ( Dim_Department[Department], "Select a department" )
+    MEASURE '_Measures'[Dept LOB] = SELECTEDVALUE ( Dim_Department[LOB] )
+
+// Returns the selected month end so the measure definitions can be run as a query
+EVALUATE { [Sel Month End] }
