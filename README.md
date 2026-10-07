@@ -8,13 +8,22 @@ Executive risk dashboard for the Risk & Controls program of a fictional bank, bu
 
 1. **Consolidation** — read all six sources through two reusable Power Query functions, with the folder path held in a parameter. Department names that differ across systems are mapped through a reference table, not hard-coded
 2. **Data quality** — eight rules run on every refresh: duplicates, unmapped departments, events without a risk, recovery above loss, missing owners, due dates before opened dates, name variants, and missing KRI values. Flagged records are listed for the data owner instead of being fixed quietly; unknown departments stay under "Unmapped" so totals still reconcile
-3. **Reconciliation** — check event counts and gross loss against the source control totals month by month. The planted duplicate shows up as a one-row break in March 2026 and clears after cleaning. KRIs built from event data are checked against the events themselves ![Data quality and reconciliation](images/05_data_quality.png)
-4. **Month-end snapshots** — expand each issue into one row for every month end it was open, so open and overdue counts can be reported for any month
-5. **Data model** — star schema: six fact tables share the department and line of business, risk, Basel event type, and date dimensions. Relationships filter in one direction only; issues use role-playing dates for opened, due, and closed
-6. **Measures** — one reporting-month selector drives every page. Month-end counts are read at the selected month only, since they cannot be summed across months; RCSA results come from the latest assessment on or before that month; KRI status is calculated against thresholds stored as data, so a threshold change needs no change to the report
+3. **Reconciliation** — check event counts and gross loss against the source control totals month by month. The planted duplicate shows up as a one-row break in March 2026 and clears after cleaning. KRIs built from event data are checked against the events themselves
+   
+   ![Data quality and reconciliation](images/05_data_quality.png)
+5. **Month-end snapshots** — expand each issue into one row for every month end it was open, so open and overdue counts can be reported for any month
+6. **Data model** — star schema: six fact tables share the department and line of business, risk, Basel event type, and date dimensions. Relationships filter in one direction only; issues use role-playing dates for opened, due, and closed
+7. **Measures** — one reporting-month selector drives every page. Month-end counts are read at the selected month only, since they cannot be summed across months; RCSA results come from the latest assessment on or before that month; KRI status is calculated against thresholds stored as data, so a threshold change needs no change to the report
 
 The Power BI report has four pages for management and one for the reporting team: an executive summary (summary line that updates with the month, KPI cards against the prior month, and an attention list with regulatory findings first), a risk and control profile (residual risk heat map that filters the risk register, with self-assessed control ratings beside independent test results), events and issues (loss trend, loss by Basel event type, issue aging), a department drill-through page, and the data quality page.
-![Executive summary](images/01_executive_summary.png) ![Risk and control profile](images/02_risk_control.png) ![Events and issues](images/03_events_issues.png) ![Department profile](images/04_department_profile.png)
+
+![Executive summary](images/01_executive_summary.png) 
+
+![Risk and control profile](images/02_risk_control.png) 
+
+![Events and issues](images/03_events_issues.png)
+
+![Department profile](images/04_department_profile.png)
 
 ## Findings
 
@@ -27,7 +36,7 @@ As of August 2026, in the synthetic data:
 ## Repository contents
 
 - `data/` — the six source files
-- `powerbi/` — the Power BI report
+- `powerbi/` — the Power BI report (.pbix) and all DAX measures as text (measures.dax)
 - `images/` — dashboard screenshots
 
 ## Notes and limits
