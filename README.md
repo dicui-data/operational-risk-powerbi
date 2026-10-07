@@ -21,7 +21,7 @@ The Power BI report has four pages for management and one for the reporting team
 
 ![Risk and control profile](images/02_risk_control.png) 
 
-
+![Events and issues](images/03_events_issues.png)
 
 ![Department profile](images/04_department_profile.png)
 
